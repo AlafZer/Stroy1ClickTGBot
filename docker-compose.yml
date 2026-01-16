@@ -1,0 +1,13 @@
+version: '3'
+
+services:
+  notification-telegram:
+    build:
+      context: .
+      dockerfile: notification-telegram.dockerfile
+    restart: always
+    deploy:
+      mode: replicated
+      replicas: 1
+    ports:
+      - "8080:8080"
