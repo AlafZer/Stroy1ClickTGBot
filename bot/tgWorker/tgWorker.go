@@ -18,7 +18,7 @@ type TGWorker struct {
 }
 
 func New(st *storage.Store, token, btName string) *TGWorker {
-	tgToken = token
+	TGToken = token
 	botName = btName
 
 	return &TGWorker{
