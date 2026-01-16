@@ -4,7 +4,6 @@ import (
 	"Stroy1ClickBot/storage"
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -19,8 +18,10 @@ type OrderReceiver struct {
 	store  *storage.Store
 }
 
-func New() *OrderReceiver {
-	ordR := &OrderReceiver{}
+func New(store *storage.Store) *OrderReceiver {
+	ordR := &OrderReceiver{
+		store: store,
+	}
 
 	srv := &http.Server{
 		Addr:    ":" + webPort,
@@ -50,39 +51,4 @@ func (ordR *OrderReceiver) Shutdown() {
 	if err := ordR.server.Shutdown(ctxT); err != nil {
 		log.Println("Failed to Shutdown server:", err)
 	}
-}
-
-func (ordR *OrderReceiver) formatingMessage(ord *Order) string {
-	var message string
-
-	items := ""
-	var state string
-	var stateEmj string
-
-	switch ord.OrderStatus {
-	case Created:
-		state = "Создан"
-		stateEmj = "✅"
-	case Paid:
-		state = "Оплачен"
-		stateEmj = "💳"
-	case Shipped:
-		state = "Отправлен"
-		stateEmj = "🛫"
-	case Delivered:
-		state = "Доставлен"
-		stateEmj = "🛬"
-	case Canceled:
-		state = "Отменён"
-		stateEmj = "❌"
-	}
-
-	for i, item := range ord.OrderItems {
-		items += fmt.Sprintf("\t%d:\n\t🆔ID Продукта: %d\n\t💵Стоимость:v%d\n\n", i, item.ProductID, item.Quantity)
-	}
-
-	message = fmt.Sprintf("ℹ️Информация по вашему заказу\n\n🆔ID заказа: %d\n%sСтатус заказа: %s\n🪪ID пользователя: %d\n📝Запись:%s\n🕐Создан: %T\n🕝Обновлён: %T\n🧺Товары:\n\n%s",
-		ord.ID, stateEmj, state, ord.UserID, ord.Notes, ord.CreatedAt, ord.UpdatedAt, items)
-
-	return message
 }

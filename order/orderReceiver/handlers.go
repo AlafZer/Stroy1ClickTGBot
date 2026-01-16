@@ -55,7 +55,7 @@ func (ordR *OrderReceiver) receiveAndSend(w http.ResponseWriter, r *http.Request
 
 	req.Header.Set("Content-Type", "application/json")
 
-	client := http.Client{}
+	client := &http.Client{}
 
 	resp, err := client.Do(req)
 	if resp != nil {
@@ -71,4 +71,49 @@ func (ordR *OrderReceiver) receiveAndSend(w http.ResponseWriter, r *http.Request
 		log.Println("Telegram returned another http status code then StatusOK (200):", resp.StatusCode)
 		return
 	}
+
+	var response jsonResponse
+
+	response.Error = false
+	response.Message = "Order was successfully send"
+
+	err = ordR.writeJSON(w, http.StatusOK, response)
+	if err != nil {
+		log.Println("writeJSON in receiveAndSend() method failed:", err)
+	}
+}
+
+func (ordR *OrderReceiver) formatingMessage(ord *Order) string {
+	var message string
+
+	items := ""
+	var state string
+	var stateEmj string
+
+	switch ord.OrderStatus {
+	case Created:
+		state = "Создан"
+		stateEmj = "✅"
+	case Paid:
+		state = "Оплачен"
+		stateEmj = "💳"
+	case Shipped:
+		state = "Отправлен"
+		stateEmj = "🛫"
+	case Delivered:
+		state = "Доставлен"
+		stateEmj = "🛬"
+	case Canceled:
+		state = "Отменён"
+		stateEmj = "❌"
+	}
+
+	for i, item := range ord.OrderItems {
+		items += fmt.Sprintf("\t%d:\n\t🆔ID Продукта: %d\n\t💵Стоимость:v%d\n\n", i, item.ProductID, item.Quantity)
+	}
+
+	message = fmt.Sprintf("ℹ️Информация по вашему заказу\n\n🆔ID заказа: %d\n%sСтатус заказа: %s\n🪪ID пользователя: %d\n📝Запись:%s\n🕐Создан: %T\n🕝Обновлён: %T\n🛒Товары:\n\n%s",
+		ord.ID, stateEmj, state, ord.UserID, ord.Notes, ord.CreatedAt, ord.UpdatedAt, items)
+
+	return message
 }
