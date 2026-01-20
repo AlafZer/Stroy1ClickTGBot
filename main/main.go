@@ -37,11 +37,10 @@ func main() {
 	var wg sync.WaitGroup
 
 	// init of our variables and prepare our database
-	//initAllStaticVars()
+	initAllStaticVars()
 
 	db, err := storage.OpenSQLite(context.Background(), storage.OpenOptions{
-		//Path: pathToSQLite,
-		Path: "storage/data/notification.db",
+		Path: pathToSQLite,
 	})
 	if err != nil {
 		log.Fatal("Cannot start the application because connection to SQLite failed")
@@ -73,9 +72,8 @@ func main() {
 	}()
 
 	// starting tgWorker
-	tgToken = "8520034678:AAHpCgUOmOH96WwP3WT27xcqCdSuFainXLI"
 	tgWorker := telegram.New(store, tgToken)
-	//mustSetWebhook(tgToken)
+	mustSetWebhook(tgToken)
 
 	wg.Add(1)
 	go func() {
