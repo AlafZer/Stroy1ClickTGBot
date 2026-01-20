@@ -16,6 +16,16 @@ import (
 var migrationsFS embed.FS
 
 func Migrate(ctx context.Context, db *sql.DB) error {
+	// BOOTSTRAP: таблица должна существовать ДО любых проверок isMigrationApplied
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    TEXT PRIMARY KEY,
+			applied_at INTEGER NOT NULL
+		);
+	`); err != nil {
+		return fmt.Errorf("storage: create schema_migrations: %w", err)
+	}
+
 	files, err := fs.Glob(migrationsFS, "migrations/*.sql")
 	if err != nil {
 		return fmt.Errorf("storage: list migrations: %w", err)

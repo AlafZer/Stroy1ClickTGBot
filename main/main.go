@@ -7,12 +7,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -21,17 +21,42 @@ type SetWebhookRequest struct {
 	URL string `json:"url"`
 }
 
+type SetWebhookResponse struct {
+	OK          bool   `json:"ok"`
+	ErrorCode   int    `json:"error_code"`
+	Description string `json:"description"`
+}
+
+var (
+	tgToken      string
+	pathToSQLite string
+)
+
 func main() {
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	var wg sync.WaitGroup
 
+	// init of our variables and prepare our database
+	//initAllStaticVars()
+
 	db, err := storage.OpenSQLite(context.Background(), storage.OpenOptions{
-		Path: "./data/notification.db",
+		//Path: pathToSQLite,
+		Path: "storage/data/notification.db",
 	})
 	if err != nil {
 		log.Fatal("Cannot start the application because connection to SQLite failed")
 	}
+	defer func() {
+		err = db.Close()
+		if err != nil {
+			log.Fatal("Cannot close the database connection")
+		}
+	}()
 
+	err = storage.Migrate(context.Background(), db)
+	if err != nil {
+		log.Fatal("Cannot start the application because migration of SQLite failed:", err)
+	}
 	store := storage.NewStore(db)
 
 	// starting orderReceiver
@@ -48,10 +73,9 @@ func main() {
 	}()
 
 	// starting tgWorker
-	tgToken := mustToken()
-
+	tgToken = "8520034678:AAHpCgUOmOH96WwP3WT27xcqCdSuFainXLI"
 	tgWorker := telegram.New(store, tgToken)
-	mustSetWebhook()
+	//mustSetWebhook(tgToken)
 
 	wg.Add(1)
 	go func() {
@@ -76,32 +100,31 @@ func main() {
 	wg.Wait()
 }
 
-func mustToken() string {
-	token := flag.String("tg-token", "", "token for access to telegram api")
+func initAllStaticVars() {
+	tgToken = strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
+	pathToSQLite = strings.TrimSpace(os.Getenv("SQLITE_PATH"))
 
-	flag.Parse()
-
-	if *token == "" {
-		log.Fatal("token or bot name are not specified")
+	if tgToken == "" || pathToSQLite == "" {
+		log.Fatal("tgToken or pathToSQLite environment variables is not specified")
 	}
-
-	return *token
 }
 
-func mustSetWebhook() {
+func mustSetWebhook(token string) {
 	var payload SetWebhookRequest
-	targetUrl := "http://localhost:9090/api/v1/telegram/updates"
+	targetUrl := "https://tg-notification.stroy1click.com/api/v1/telegram/updates"
 
 	payload.URL = targetUrl
 
 	entry, _ := json.Marshal(payload)
 
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/setWebhook", telegram.TGToken)
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/setWebhook", token)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(entry))
 	if err != nil {
 		log.Fatal("Cannot start the application:", err)
 	}
+
+	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
 
@@ -114,7 +137,16 @@ func mustSetWebhook() {
 
 	if err != nil {
 		log.Fatal("Cannot start the application:", err)
-	} else if resp.StatusCode != http.StatusOK {
-		log.Fatal("Cannot start the application because response status code another then statusOK (200)", resp.StatusCode)
 	}
+
+	var data SetWebhookResponse
+
+	dec := json.NewDecoder(resp.Body)
+
+	err = dec.Decode(&data)
+	if err != nil {
+		log.Println(err)
+	}
+
+	log.Println(resp.StatusCode, data)
 }

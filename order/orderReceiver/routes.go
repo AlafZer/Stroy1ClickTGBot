@@ -14,5 +14,10 @@ func (ordR *OrderReceiver) routes() http.Handler {
 
 	mux.Post("/api/v1/telegram/send", ordR.receiveAndSend)
 
+	//HTML documentation
+	mux.Get("/docs", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./docs/index.html")
+	})
+
 	return mux
 }

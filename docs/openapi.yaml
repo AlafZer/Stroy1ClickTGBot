@@ -1,0 +1,445 @@
+openapi: 3.0.3
+
+info:
+  title: Stroy1ClickBot API
+  version: 1.1.0
+  description: |
+    API состоит из двух сервисов:
+
+    **tgWorker (port 9090)**:
+    - генерирует deep-link для привязки Telegram
+    - принимает webhook обновления от Telegram (Update)
+
+    **orderReceiver (port 8080)**:
+    - принимает событие заказа и отправляет сообщение в Telegram
+
+tags:
+  - name: tgWorker
+    description: |
+      tgWorker (порт 9090). Базовый URL: `http://localhost:9090`
+  - name: orderReceiver
+    description: |
+      orderReceiver (порт 8080). Базовый URL: `http://localhost:8080`
+  - name: health
+    description: Healthcheck / ping
+
+paths:
+  /api/v1/telegram/link:
+    post:
+      tags: [ tgWorker ]
+      summary: Create Telegram deep-link for user
+      description: |
+        Создаёт короткоживущий токен (например, 20 минут) и возвращает deep-link вида:
+        `https://t.me/<bot>?start=<TOKEN>`
+
+        Метод: **POST**, потому что входные данные передаются JSON body.
+      operationId: createTelegramLink
+      servers:
+        - url: http://localhost:9090
+          description: tgWorker (local)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LinkRequest"
+            examples:
+              minimal:
+                summary: Minimal request
+                value:
+                  user_id: 123
+      responses:
+        "200":
+          description: Link created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LinkResponse"
+              examples:
+                ok:
+                  summary: Success example
+                  value:
+                    link_url: "https://t.me/Stroy1ClickOrderBot?start=abcdef123456"
+        "400":
+          description: Invalid JSON / validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                bad_json:
+                  value:
+                    error: true
+                    message: "invalid JSON body"
+        "500":
+          description: Token storage error / internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                token_fail:
+                  value:
+                    error: true
+                    message: "cannot create token"
+
+
+  /api/v1/telegram/updates:
+    post:
+      tags: [tgWorker]
+      summary: Telegram webhook updates
+      description: |
+        Endpoint для Telegram webhook.
+
+        Типичный сценарий:
+        - пользователь нажимает deep-link `.../start=<TOKEN>`
+        - Telegram присылает Update, в `message.text` приходит `/start <TOKEN>`
+        - сервис извлекает токен, связывает `chat_id` ↔ `user_id`, затем отправляет подтверждение
+
+        Примечание: в реальности Telegram Update богаче; здесь описан минимальный набор полей, который использует сервис.
+      operationId: telegramWebhookUpdate
+      servers:
+        - url: http://localhost:9090
+          description: tgWorker (local)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelegramUpdateMinimal"
+            examples:
+              start_with_token:
+                summary: /start with token
+                value:
+                  update_id: 10001
+                  message:
+                    message_id: 50
+                    text: "/start abcdef123456"
+                    chat:
+                      id: 999888777
+                      type: "private"
+              not_start:
+                summary: Other message (token not present)
+                value:
+                  update_id: 10002
+                  message:
+                    message_id: 51
+                    text: "hello"
+                    chat:
+                      id: 999888777
+                      type: "private"
+      responses:
+        "200":
+          description: Update processed (or ignored)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BasicResponse"
+              examples:
+                processed:
+                  value:
+                    ok: true
+                    message: "processed"
+                ignored:
+                  value:
+                    ok: true
+                    message: "ignored"
+        "400":
+          description: Invalid update payload / cannot parse JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                invalid:
+                  value:
+                    error: true
+                    message: "invalid update payload"
+        "429":
+          description: Too many requests (rate limit)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                too_many:
+                  value:
+                    error: true
+                    message: "too many requests"
+        "500":
+          description: Internal error (token consume / DB / telegram send)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                internal:
+                  value:
+                    error: true
+                    message: "internal error"
+
+  /ping:
+    get:
+      tags: [health, orderReceiver]
+      summary: Heartbeat / ping
+      description: Provided by chi middleware Heartbeat("/ping")
+      operationId: ping
+      servers:
+        - url: http://localhost:8080
+          description: orderReceiver (local)
+      responses:
+        "200":
+          description: OK
+          content:
+            text/plain:
+              examples:
+                ok:
+                  value: "."
+
+  /api/v1/telegram/send:
+    post:
+      tags: [orderReceiver]
+      summary: Receive order event and send Telegram message
+      description: |
+        Принимает событие заказа, находит `chat_id` по `user_id` и отправляет сообщение в Telegram.
+
+        ✅ **Обязательные поля только**: `id`, `user_id`
+        Остальные поля опциональны, но чем больше данных пришлёте — тем информативнее будет сообщение.
+
+        Возможные ошибки:
+        - `404` если пользователь ещё не привязан к Telegram
+        - `502/500` если Telegram API вернул ошибку или проблемы сети/хранилища
+      operationId: sendOrderToTelegram
+      servers:
+        - url: http://localhost:8080
+          description: orderReceiver (local)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderEvent"
+            examples:
+              minimal_required_only:
+                summary: Minimal (only required)
+                value:
+                  id: 555
+                  user_id: 123
+              typical_full:
+                summary: Typical full event
+                value:
+                  id: 555
+                  user_id: 123
+                  order_status: "Paid"
+                  notes: "Leave at the door"
+                  created_at: "2026-01-20T10:00:00Z"
+                  updated_at: "2026-01-20T10:05:00Z"
+                  order_items:
+                    - product_id: 77
+                      quantity: 2
+                    - product_id: 88
+                      quantity: 1
+      responses:
+        "200":
+          description: Message successfully sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonResponse"
+              examples:
+                ok:
+                  value:
+                    error: false
+                    message: "Order was successfully send"
+        "400":
+          description: Bad request (invalid JSON)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                bad_json:
+                  value:
+                    error: true
+                    message: "invalid JSON body"
+        "404":
+          description: User not linked to Telegram
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                not_linked:
+                  value:
+                    error: true
+                    message: "user not linked to telegram"
+        "502":
+          description: Telegram API returned error / bad status code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                telegram_fail:
+                  value:
+                    error: true
+                    message: "Telegram returned another http status code then StatusOK (200)"
+        "500":
+          description: Internal error (DB / network / unknown)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                internal:
+                  value:
+                    error: true
+                    message: "internal error"
+
+components:
+  schemas:
+    LinkRequest:
+      type: object
+      required: [user_id]
+      properties:
+        user_id:
+          type: integer
+          format: int64
+          description: Internal user identifier
+          example: 123
+
+    LinkResponse:
+      type: object
+      required: [link_url]
+      properties:
+        link_url:
+          type: string
+          description: Telegram deep-link URL to bind user to chat
+          example: "https://t.me/Stroy1ClickOrderBot?start=TOKEN"
+
+    TelegramUpdateMinimal:
+      type: object
+      required: [message]
+      properties:
+        update_id:
+          type: integer
+          format: int64
+          example: 10001
+        message:
+          type: object
+          required: [text, chat]
+          properties:
+            message_id:
+              type: integer
+              format: int64
+              example: 50
+            text:
+              type: string
+              description: Message text, e.g. "/start <token>"
+              example: "/start abcdef123456"
+            chat:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  type: integer
+                  format: int64
+                  description: Telegram chat ID
+                  example: 999888777
+                type:
+                  type: string
+                  description: Telegram chat type (private/group/supergroup/channel)
+                  example: "private"
+
+    OrderEvent:
+      type: object
+      required: [id, user_id]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Order ID
+          example: 555
+        user_id:
+          type: integer
+          format: int64
+          description: User ID (must be already linked to Telegram)
+          example: 123
+        order_status:
+          $ref: "#/components/schemas/OrderStatus"
+        notes:
+          type: string
+          nullable: true
+          description: Optional note/comment for order
+          example: "Leave at the door"
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Order creation time
+          example: "2026-01-20T10:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Order update time
+          example: "2026-01-20T10:05:00Z"
+        order_items:
+          type: array
+          description: Optional list of order items
+          items:
+            $ref: "#/components/schemas/OrderItem"
+
+    OrderItem:
+      type: object
+      required: [product_id, quantity]
+      properties:
+        product_id:
+          type: integer
+          format: int64
+          example: 77
+        quantity:
+          type: integer
+          format: int32
+          minimum: 1
+          example: 2
+
+    OrderStatus:
+      type: string
+      description: Order status enum
+      enum: [Created, Paid, Shipped, Delivered, Canceled]
+      example: "Paid"
+
+    JsonResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "Order was successfully send"
+
+    BasicResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        message:
+          type: string
+          nullable: true
+          example: "processed"
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "invalid JSON body"
