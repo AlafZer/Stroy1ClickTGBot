@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-type jsonResponse struct {
+type JSONResponse struct {
 	Error   bool   `json:"error"`
 	Message string `json:"message"`
 }
@@ -63,7 +63,7 @@ func (tgWrkr *TGWorker) errorJSON(w http.ResponseWriter, err error, status ...in
 		statusCode = status[0]
 	}
 
-	var payload jsonResponse
+	var payload JSONResponse
 
 	payload.Error = true
 	payload.Message = err.Error()

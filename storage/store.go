@@ -20,11 +20,12 @@ type bindTokens struct {
 }
 
 type tgBindings struct {
-	ID        int
+	ID        int64
 	UserID    int64
 	ChatID    int64
 	BoundAt   time.Time
 	UpdatedAt time.Time
+	IsAdmin   int
 }
 
 var (
@@ -209,4 +210,30 @@ func (s *Store) CleanupExpiredTokens(ctx context.Context) (deleted int64, err er
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// GetAdminChatID returns one admin chatID
+func (s *Store) GetAdminChatID(ctx context.Context) (int64, error) {
+	var admin int64
+
+	query := `SELECT user_id FROM tg_bindings WHERE is_admin = 1`
+
+	err := s.db.QueryRowContext(ctx, query).Scan(&admin)
+	if err != nil {
+		return -1, err
+	}
+
+	return admin, nil
+}
+
+// ChangeAdminRole changes field is_admin to current state in the database by userId
+func (s *Store) ChangeAdminRole(ctx context.Context, userId int64, state bool) error {
+	query := `UPDATE tg_bindings SET is_admin = ? WHERE user_id = ?`
+
+	_, err := s.db.ExecContext(ctx, query, state, userId)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

@@ -10,11 +10,14 @@ import (
 )
 
 const (
-	webPort                        = "9090"
+	webPort                        = ":9090"
 	minTimeDifferent time.Duration = 5 * time.Second
 )
 
-var TGToken string
+var (
+	TGToken  string
+	TokenAPI string
+)
 
 type TGWorker struct {
 	store  *storage.Store
@@ -28,17 +31,21 @@ type RequestResistor struct {
 
 var rr *RequestResistor
 
-func New(st *storage.Store, token string) *TGWorker {
+func New(st *storage.Store, token, tokenApi string) *TGWorker {
 	TGToken = token
+	TokenAPI = tokenApi
 
-	rr = &RequestResistor{}
+	rr = &RequestResistor{
+		mtx:        sync.Mutex{},
+		lastAppeal: make(map[int64]time.Time),
+	}
 
 	tgWrkr := TGWorker{
 		store: st,
 	}
 
 	tgWrkr.server = &http.Server{
-		Addr:    ":" + webPort,
+		Addr:    webPort,
 		Handler: tgWrkr.routes(),
 	}
 

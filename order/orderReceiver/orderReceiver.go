@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	webPort = "8080"
+	webPort = ":8080"
 )
 
 type OrderReceiver struct {
@@ -24,7 +24,7 @@ func New(store *storage.Store) *OrderReceiver {
 	}
 
 	srv := &http.Server{
-		Addr:    ":" + webPort,
+		Addr:    webPort,
 		Handler: ordR.routes(),
 	}
 

@@ -7,7 +7,6 @@ RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /app/notifTelegramApp ./main
-RUN ls ../src
 
 FROM alpine:latest
 WORKDIR /app

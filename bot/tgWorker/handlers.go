@@ -25,6 +25,18 @@ type LinkResponse struct {
 	LinkURL string `json:"link_url"`
 }
 
+// tgLink returns a link with token which will opened by user
+// tgLink godoc
+// @Summary      Create Telegram deep-link for binding
+// @Description  Generates one-time token and returns t.me link with /start <token>.
+// @Tags         telegram
+// @Accept       json
+// @Produce      json
+// @Param        request body LinkRequest true "User id to link"
+// @Success      200 {object} LinkResponse
+// @Failure      400 {object} JSONResponse
+// @Failure      500 {object} JSONResponse
+// @Router       /api/v1/telegram/link [post]
 func (tgWrkr *TGWorker) tgLink(w http.ResponseWriter, r *http.Request) {
 	var entry LinkRequest
 
@@ -55,10 +67,26 @@ func (tgWrkr *TGWorker) tgLink(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// tgUpdates receives the update requests from telegramAPI to link the chatID and userID
+// tgUpdates godoc
+// @Summary      Telegram webhook endpoint
+// @Description  Receives updates from Telegram and binds userId to chatId.
+// @Tags         telegram
+// @Accept       json
+// @Produce      json
+// @Param        X-Telegram-Bot-Api-Secret-Token header string true "Secret token"
+// @Param        update body UpdatesRequest true "Telegram update payload (subset)"
+// @Success      200 {string} string "OK"
+// @Failure      400 {object} JSONResponse
+// @Failure      403 {object} JSONResponse
+// @Failure      429 {object} JSONResponse
+// @Failure      500 {object} JSONResponse
+// @Router       /api/v1/telegram/updates [post]
 func (tgWrkr *TGWorker) tgUpdates(w http.ResponseWriter, r *http.Request) {
 	tk := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
 
-	if tk != TGToken {
+	if tk != TokenAPI {
+		_ = tgWrkr.errorJSON(w, errors.New("invalid token"), http.StatusForbidden)
 		return
 	}
 
@@ -66,29 +94,32 @@ func (tgWrkr *TGWorker) tgUpdates(w http.ResponseWriter, r *http.Request) {
 
 	err := tgWrkr.readJSON(w, r, &entry)
 	if err != nil {
-		//_ = tgWrkr.errorJSON(w, err)
+		_ = tgWrkr.errorJSON(w, err)
 		log.Println("readJSON() method in tgUpdates() method cannot decode the request:", err)
 		return
 	}
 
 	if !rr.checkLastAppeal(entry.Message.Chat.ID) {
 		log.Printf("Too much requests from user by %d ID", entry.Message.Chat.ID)
+		_ = tgWrkr.errorJSON(w, errors.New("too much requests"))
 		return
 	}
 
 	token, ok, err := tgWrkr.extractToken(&entry)
+
 	if err != nil {
-		//_ = tgWrkr.errorJSON(w, err)
+		_ = tgWrkr.errorJSON(w, err)
 		log.Println("extractToken from update query failed:", err)
 		return
 	} else if !ok {
-		//_ = tgWrkr.errorJSON(w, errors.New("Invalid token"))
+		_ = tgWrkr.errorJSON(w, errors.New("invalid token"))
 		log.Println("extractToken from update query failed:", err)
 		return
 	}
 
 	userID, err := tgWrkr.store.ConsumeToken(context.Background(), token)
 	if err != nil {
+		_ = tgWrkr.errorJSON(w, err)
 		log.Println("ConsumeToken() method from tgUpdates() failed:", err)
 		return
 	}
@@ -97,11 +128,14 @@ func (tgWrkr *TGWorker) tgUpdates(w http.ResponseWriter, r *http.Request) {
 
 	err = tgWrkr.store.UpsertBinding(context.Background(), userID, chatID)
 	if err != nil {
+		_ = tgWrkr.errorJSON(w, err)
 		log.Println("Cannot UpsertBinding:", err)
+		return
 	}
 
 	err = tgWrkr.sendMessage(chatID)
 	if err != nil {
+		_ = tgWrkr.errorJSON(w, err)
 		log.Println(err)
 	}
 }
@@ -121,7 +155,7 @@ func (tgWrkr *TGWorker) extractToken(update *UpdatesRequest) (string, bool, erro
 		return token, true, nil
 	}
 
-	return "", false, errors.New("Invalid query")
+	return "", false, errors.New("invalid query")
 }
 
 func (tgWrkr *TGWorker) sendMessage(chatID int64) error {
@@ -146,10 +180,12 @@ func (tgWrkr *TGWorker) sendMessage(chatID int64) error {
 
 	resp, err := client.Do(req)
 	if resp == nil {
-		return errors.New("Response is not specified")
+		return errors.New("response is not specified")
 	}
 
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if err != nil {
 		return err

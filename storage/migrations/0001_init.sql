@@ -23,8 +23,9 @@ CREATE TABLE IF NOT EXISTS tg_bindings (
                                            user_id    INTEGER PRIMARY KEY,
                                            chat_id    INTEGER NOT NULL,
                                            bound_at   INTEGER NOT NULL,
-                                           updated_at INTEGER NOT NULL
+                                           updated_at INTEGER NOT NULL,
+                                           is_admin   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_tg_bindings_chat_id
-    ON tg_bindings(chat_id);
+    ON tg_bindings(user_id);
