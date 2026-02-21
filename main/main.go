@@ -7,43 +7,95 @@ package main
 
 import (
 	telegram "Stroy1ClickBot/bot/tgWorker"
+	dbController "Stroy1ClickBot/databaseController"
 	order "Stroy1ClickBot/order/orderReceiver"
-	"Stroy1ClickBot/storage"
+	"Stroy1ClickBot/repository"
 	"context"
 	"log"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
-
-type SetWebhookRequest struct {
-	URL string `json:"url"`
-}
-
-type SetWebhookResponse struct {
-	OK          bool   `json:"ok"`
-	ErrorCode   int    `json:"error_code"`
-	Description string `json:"description"`
-}
 
 var (
 	tgToken      string
 	pathToSQLite string
-	domain       string
-	tgApiToken   string
+	//domain       string
+	tgApiToken    string
+	accessToken   string
+	kafkaInstance string
 )
 
+type ServerInterface interface {
+	ListenAndServe(ctx context.Context) error
+}
+
 func main() {
-	errCh := make(chan error, 2)
 	var wg sync.WaitGroup
 
 	// initialization of our variables and prepare our database
 	initAllStaticVars()
+	store := prepareDB(pathToSQLite)
 
-	db, err := storage.OpenSQLite(context.Background(), storage.OpenOptions{
-		Path: pathToSQLite,
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	// TODO Initialize servers, create error channel and
+	ordReceiver := order.New(store, kafkaInstance)
+	tgWorker := telegram.New(store, tgToken, tgApiToken)
+	dbCtrl := dbController.NewDBController(store, accessToken)
+
+	servers := []ServerInterface{ordReceiver, tgWorker, dbCtrl}
+
+	errCh := make(chan error, len(servers))
+
+	starter(servers, errCh, &wg, ctx)
+
+	// errors handle
+	select {
+	case <-ctx.Done():
+	case err := <-errCh:
+		if err != nil {
+			log.Println(err)
+		}
+	}
+
+	ctxT, canc := context.WithTimeout(context.Background(), time.Second*15)
+	defer canc()
+
+	tgWorker.Shutdown(ctxT)
+
+	stop()
+
+	wg.Wait()
+
+	close(errCh)
+
+	for err := range errCh {
+		log.Println(err)
+	}
+}
+
+func initAllStaticVars() {
+	tgToken = strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
+	pathToSQLite = strings.TrimSpace(os.Getenv("SQLITE_PATH"))
+	//domain = strings.TrimSpace(os.Getenv("DOMAIN"))
+	tgApiToken = strings.TrimSpace(os.Getenv("TELEGRAM_API_TOKEN"))
+	accessToken = strings.TrimSpace(os.Getenv("ACCESS_TOKEN"))
+	kafkaInstance = strings.TrimSpace(os.Getenv("KAFKA_INSTANCE"))
+
+	if slices.Contains([]string{tgToken, pathToSQLite, tgApiToken, accessToken, kafkaInstance}, "") {
+		log.Fatal("Some environment variable is not specified")
+	}
+}
+
+func prepareDB(path string) *repository.Store {
+	db, err := repository.OpenSQLite(context.Background(), repository.OpenOptions{
+		Path: path,
 	})
 	if err != nil {
 		log.Fatal("Cannot start the application because connection to SQLite failed")
@@ -55,101 +107,21 @@ func main() {
 		}
 	}()
 
-	err = storage.Migrate(context.Background(), db)
+	err = repository.Migrate(context.Background(), db)
 	if err != nil {
 		log.Fatal("Cannot start the application because migration of SQLite failed:", err)
 	}
-	store := storage.NewStore(db)
 
-	// starting orderReceiver
-	ordReceiver := order.New(store)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	// Beginning of listening on the port 8080
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		errCh <- ordReceiver.Listen()
-	}()
-
-	// starting tgWorker
-	tgWorker := telegram.New(store, tgToken, tgApiToken)
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		errCh <- tgWorker.ListenAndWork()
-	}()
-
-	// error handle
-	select {
-	case <-ctx.Done():
-		ordReceiver.Shutdown()
-		tgWorker.Shutdown()
-	case err = <-errCh:
-		ordReceiver.Shutdown()
-		tgWorker.Shutdown()
-		if err != nil {
-			stop()
-			log.Println("Error was capture from Listen() method of OrderReceiver or tgWorker type:", err)
-		}
-	}
-
-	wg.Wait()
+	return repository.NewStore(db)
 }
 
-func initAllStaticVars() {
-	tgToken = strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
-	pathToSQLite = strings.TrimSpace(os.Getenv("SQLITE_PATH"))
-	domain = strings.TrimSpace(os.Getenv("DOMAIN"))
-	tgApiToken = strings.TrimSpace(os.Getenv("TELEGRAM_API_TOKEN"))
-
-	if tgToken == "" || pathToSQLite == "" {
-		log.Fatal("tgToken, pathToSQLite, domain or tgApiToken environment variables are not specified")
+func starter(servers []ServerInterface, eCh chan<- error, wg *sync.WaitGroup, ctx context.Context) {
+	for _, server := range servers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := server.ListenAndServe(ctx)
+			eCh <- err
+		}()
 	}
 }
-
-//func mustSetWebhook(token string) {
-//	var payload SetWebhookRequest
-//
-//	targetUrl := fmt.Sprintf("https://%s/api/v1/telegram/updates", domain)
-//
-//	payload.URL = targetUrl
-//
-//	entry, _ := json.Marshal(payload)
-//
-//	url := fmt.Sprintf("https://api.telegram.org/bot%s/setWebhook", token)
-//
-//	req, err := http.NewRequest("POST", url, bytes.NewBuffer(entry))
-//	if err != nil {
-//		log.Fatal("Cannot start the application:", err)
-//	}
-//
-//	req.Header.Set("Content-Type", "application/json")
-//
-//	client := &http.Client{}
-//
-//	resp, err := client.Do(req)
-//	if resp == nil {
-//		log.Fatal("Cannot start the application because response cannot be nil")
-//	}
-//
-//	defer resp.Body.Close()
-//
-//	if err != nil {
-//		log.Fatal("Cannot start the application:", err)
-//	}
-//
-//	var data SetWebhookResponse
-//
-//	dec := json.NewDecoder(resp.Body)
-//
-//	err = dec.Decode(&data)
-//	if err != nil {
-//		log.Println(err)
-//	}
-//
-//	log.Println(resp.StatusCode, data)
-//}

@@ -9,6 +9,14 @@ type TGMessage struct {
 	MessageID int64  `json:"message_id"`
 	Text      string `json:"text"`
 	Chat      TGChat `json:"chat"`
+	From      TGUser `json:"from"`
+}
+
+type TGUser struct {
+	ID        int64  `json:"id"`
+	IsBot     bool   `json:"is_bot"`
+	FirstName string `json:"first_name"`
+	Username  string `json:"username"`
 }
 
 type TGChat struct {

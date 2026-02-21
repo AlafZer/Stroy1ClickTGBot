@@ -1,9 +1,10 @@
-package storage
+package repository
 
 import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -82,7 +83,7 @@ func isMigrationApplied(ctx context.Context, db *sql.DB, version string) (bool, 
 		version,
 	).Scan(&v)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {

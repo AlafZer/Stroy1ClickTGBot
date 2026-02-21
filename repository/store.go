@@ -1,4 +1,4 @@
-package storage
+package repository
 
 import (
 	"context"
@@ -11,28 +11,29 @@ import (
 	"time"
 )
 
-type bindTokens struct {
-	ID        int64
-	tokenHash string
-	userID    int64
-	ExpiresAt time.Time
-	UsedAt    int
+type BindTokens struct {
+	ID        int64     `json:"id"`
+	TokenHash string    `json:"token_hash"`
+	UserID    int64     `json:"user_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+	UsedAt    int       `json:"used_at"`
 }
 
-type tgBindings struct {
-	ID        int64
-	UserID    int64
-	ChatID    int64
-	BoundAt   time.Time
-	UpdatedAt time.Time
-	IsAdmin   int
+type TGBindings struct {
+	ID        int64     `json:"id"`
+	UserID    int64     `json:"user_id"`
+	ChatID    int64     `json:"chat_id"`
+	BoundAt   time.Time `json:"bound_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	IsAdmin   int       `json:"is_admin"`
+	Username  string    `json:"username"`
 }
 
 var (
-	// Возвращаем это при: токен не найден / истёк / уже использован / гонка
+	// ErrTokenInvalidOrExpired Возвращаем это при: токен не найден / истёк / уже использован / гонка
 	ErrTokenInvalidOrExpired = errors.New("token invalid/expired/used")
 
-	// Если привязки нет
+	// ErrNotLinked Если привязки нет
 	ErrNotLinked = errors.New("user not linked to telegram")
 )
 
@@ -151,19 +152,19 @@ func (s *Store) ConsumeToken(ctx context.Context, token string) (int64, error) {
 }
 
 // UpsertBinding создаёт/обновляет привязку userId -> chatId.
-func (s *Store) UpsertBinding(ctx context.Context, userID, chatID int64) error {
+func (s *Store) UpsertBinding(ctx context.Context, userID, chatID int64, username string) error {
 	if userID <= 0 || chatID == 0 {
 		return fmt.Errorf("storage: invalid userID/chatID")
 	}
 
 	now := time.Now().UTC().Unix()
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO tg_bindings(user_id, chat_id, bound_at, updated_at)
-		 VALUES(?, ?, ?, ?)
+		`INSERT INTO tg_bindings(user_id, chat_id, tg_username, bound_at, updated_at)
+		 VALUES(?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   chat_id = excluded.chat_id,
 		   updated_at = excluded.updated_at;`,
-		userID, chatID, now, now,
+		userID, chatID, username, now, now,
 	)
 	return err
 }
@@ -179,7 +180,7 @@ func (s *Store) GetChatID(ctx context.Context, userID int64) (chatID int64, ok b
 		userID,
 	).Scan(&chatID)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil
 	}
 	if err != nil {
@@ -216,7 +217,7 @@ func (s *Store) CleanupExpiredTokens(ctx context.Context) (deleted int64, err er
 func (s *Store) GetAdminChatID(ctx context.Context) (int64, error) {
 	var admin int64
 
-	query := `SELECT user_id FROM tg_bindings WHERE is_admin = 1`
+	query := `SELECT chat_id FROM tg_bindings WHERE is_admin = 1`
 
 	err := s.db.QueryRowContext(ctx, query).Scan(&admin)
 	if err != nil {
@@ -226,8 +227,8 @@ func (s *Store) GetAdminChatID(ctx context.Context) (int64, error) {
 	return admin, nil
 }
 
-// ChangeAdminRole changes field is_admin to current state in the database by userId
-func (s *Store) ChangeAdminRole(ctx context.Context, userId int64, state bool) error {
+// SetAdminRole changes field is_admin to current state in the database by userId
+func (s *Store) SetAdminRole(ctx context.Context, userId int64, state bool) error {
 	query := `UPDATE tg_bindings SET is_admin = ? WHERE user_id = ?`
 
 	_, err := s.db.ExecContext(ctx, query, state, userId)
@@ -236,4 +237,67 @@ func (s *Store) ChangeAdminRole(ctx context.Context, userId int64, state bool) e
 	}
 
 	return nil
+}
+
+func (s *Store) GetAllBindings(ctx context.Context) ([]*TGBindings, error) {
+	var bindings []*TGBindings
+
+	query := `SELECT * FROM tg_bindings`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var binding TGBindings
+		err = rows.Scan(&binding.ID, &binding.UserID, &binding.ChatID, &binding.BoundAt, &binding.UpdatedAt, &binding.IsAdmin)
+		if err != nil {
+			return bindings, err
+		}
+
+		bindings = append(bindings, &binding)
+	}
+
+	return bindings, nil
+}
+
+func (s *Store) GetAllBindingsByUserID(ctx context.Context, userID int64) ([]*TGBindings, error) {
+	var bindings []*TGBindings
+
+	query := `SELECT * FROM tg_bindings WHERE user_id = ?`
+	row := s.db.QueryRowContext(ctx, query, userID)
+
+	var binding TGBindings
+	err := row.Scan(&binding.ID, &binding.UserID, &binding.ChatID, &binding.BoundAt, &binding.UpdatedAt, &binding.IsAdmin)
+	if err != nil {
+		return nil, err
+	}
+
+	bindings = append(bindings, &binding)
+
+	return bindings, nil
+}
+
+func (s *Store) GetAllTokens(ctx context.Context) ([]*BindTokens, error) {
+	var tokens []*BindTokens
+
+	query := `SELECT * FROM bind_tokens`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var token BindTokens
+		err = rows.Scan(&token.ID, &token.TokenHash, &token.UserID, &token.ExpiresAt, &token.UsedAt)
+		if err != nil {
+			return tokens, err
+		}
+
+		tokens = append(tokens, &token)
+	}
+
+	return tokens, nil
 }

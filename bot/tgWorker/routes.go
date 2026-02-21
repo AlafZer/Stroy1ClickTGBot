@@ -19,5 +19,7 @@ func (tgWrkr *TGWorker) routes() http.Handler {
 	// This route is responsible by return telegram URL which will opened by user
 	mux.Post("/api/v1/telegram/link", tgWrkr.tgLink)
 
+	mux.Delete("/api/v1/telegram/binding/{UserID}", tgWrkr.tgDelete)
+
 	return mux
 }

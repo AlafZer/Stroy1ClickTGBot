@@ -1,8 +1,9 @@
 package telegram
 
 import (
-	"Stroy1ClickBot/storage"
+	"Stroy1ClickBot/repository"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -10,7 +11,7 @@ import (
 )
 
 const (
-	webPort                        = ":9090"
+	port                           = 9090
 	minTimeDifferent time.Duration = 5 * time.Second
 )
 
@@ -20,7 +21,7 @@ var (
 )
 
 type TGWorker struct {
-	store  *storage.Store
+	store  *repository.Store
 	server *http.Server
 }
 
@@ -31,7 +32,7 @@ type RequestResistor struct {
 
 var rr *RequestResistor
 
-func New(st *storage.Store, token, tokenApi string) *TGWorker {
+func New(st *repository.Store, token, tokenApi string) *TGWorker {
 	TGToken = token
 	TokenAPI = tokenApi
 
@@ -45,24 +46,46 @@ func New(st *storage.Store, token, tokenApi string) *TGWorker {
 	}
 
 	tgWrkr.server = &http.Server{
-		Addr:    webPort,
+		Addr:    fmt.Sprintf(":%d", port),
 		Handler: tgWrkr.routes(),
 	}
 
 	return &tgWrkr
 }
 
-func (tgWrkr *TGWorker) ListenAndWork() error {
-	log.Println("Starting tgWorker ListenAndWork on port:", webPort)
-	return tgWrkr.server.ListenAndServe()
+func (tgWrkr *TGWorker) ListenAndServe(ctx context.Context) error {
+	log.Printf("Starting tgWorker ListenAndWork on port :%d", port)
+
+	ctxC, canc := context.WithCancel(ctx)
+	defer canc()
+
+	clner := NewCleaner(tgWrkr.store, time.Hour)
+
+	errCh := make(chan error)
+
+	go func() {
+		errCh <- clner.Clean(ctxC)
+	}()
+
+	// Starting ListenandServe and waiting for Graceful Shutdown
+	err := tgWrkr.server.ListenAndServe()
+
+	// Processing error from errCh
+	canc()
+
+	errFromCleaner := <-errCh
+	if errFromCleaner != nil {
+		log.Printf("An error occurred from cleaner: %s", errFromCleaner)
+	}
+	close(errCh)
+
+	// returning error from server
+	return fmt.Errorf("error from TGWorker: %w", err)
 }
 
-func (tgWrkr *TGWorker) Shutdown() {
-	ctxT, cancel := context.WithTimeout(context.Background(), time.Second*15)
-	defer cancel()
-
-	// Graceful Shutdown
-	if err := tgWrkr.server.Shutdown(ctxT); err != nil {
+func (tgWrkr *TGWorker) Shutdown(ctx context.Context) {
+	// Graceful Shutdown with context
+	if err := tgWrkr.server.Shutdown(ctx); err != nil {
 		log.Println("Failed to Shutdown server:", err)
 	}
 }
@@ -78,7 +101,7 @@ func (rr *RequestResistor) checkLastAppeal(chatID int64) bool {
 		return true
 	}
 
-	dur := time.Now().Sub(last)
+	dur := time.Since(last)
 
 	if dur < minTimeDifferent {
 		return false

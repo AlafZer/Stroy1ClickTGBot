@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type TGSendRequest struct {
@@ -125,8 +128,9 @@ func (tgWrkr *TGWorker) tgUpdates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chatID := entry.Message.Chat.ID
+	username := entry.Message.From.Username
 
-	err = tgWrkr.store.UpsertBinding(context.Background(), userID, chatID)
+	err = tgWrkr.store.UpsertBinding(context.Background(), userID, chatID, username)
 	if err != nil {
 		_ = tgWrkr.errorJSON(w, err)
 		log.Println("Cannot UpsertBinding:", err)
@@ -194,4 +198,27 @@ func (tgWrkr *TGWorker) sendMessage(chatID int64) error {
 	}
 
 	return nil
+}
+
+func (tgWrkr *TGWorker) tgDelete(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(chi.URLParam(r, "UserID"), 10, 64)
+	if err != nil {
+		log.Printf("Cannot read url parameter UserID in the current url: %s", err)
+		_ = tgWrkr.errorJSON(w, err)
+		return
+	}
+
+	err = tgWrkr.store.DeleteBinding(context.Background(), userID)
+	if err != nil {
+		log.Printf("Cannot delete the binding with provided userID:%d; error:%s", userID, err)
+		_ = tgWrkr.errorJSON(w, err)
+		return
+	}
+
+	var response JSONResponse
+
+	response.Error = false
+	response.Message = "The binding was successfully deleted"
+
+	_ = tgWrkr.writeJSON(w, http.StatusOK, response)
 }

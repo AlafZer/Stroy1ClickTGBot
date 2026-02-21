@@ -1,54 +1,41 @@
 package order
 
 import (
-	"Stroy1ClickBot/storage"
+	"Stroy1ClickBot/repository"
 	"context"
-	"errors"
 	"log"
-	"net/http"
-	"time"
 )
 
 const (
-	webPort = ":8080"
+	port = 8080
 )
 
 type OrderReceiver struct {
-	server *http.Server
-	store  *storage.Store
+	//server *http.Server
+	store    *repository.Store
+	instance string
 }
 
-func New(store *storage.Store) *OrderReceiver {
+func New(store *repository.Store, instance string) *OrderReceiver {
 	ordR := &OrderReceiver{
-		store: store,
+		store:    store,
+		instance: instance,
 	}
-
-	srv := &http.Server{
-		Addr:    webPort,
-		Handler: ordR.routes(),
-	}
-
-	ordR.server = srv
 
 	return ordR
 }
 
-func (ordR *OrderReceiver) Listen() error {
-	log.Println("Starting OrderReceiverServer on port:", webPort)
-	err := ordR.server.ListenAndServe()
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
+func (ordR *OrderReceiver) ListenAndServe(ctx context.Context) error {
+	log.Printf("Starting OrderReceiverServer on port: :%d\n", port)
+	err := ordR.receiveAndSend(ctx)
 
-	return nil
+	return err
 }
 
-func (ordR *OrderReceiver) Shutdown() {
-	ctxT, cancel := context.WithTimeout(context.Background(), time.Second*15)
-	defer cancel()
-
-	// Graceful Shutdown
-	if err := ordR.server.Shutdown(ctxT); err != nil {
-		log.Println("Failed to Shutdown server:", err)
-	}
-}
+//func (ordR *OrderReceiver) Shutdown(ctx context.Context) {
+//
+//	// Graceful Shutdown
+//	if err := ordR.server.Shutdown(ctx); err != nil {
+//		log.Println("Failed to Shutdown server:", err)
+//	}
+//}
